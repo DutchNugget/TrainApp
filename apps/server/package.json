@@ -1,22 +1,21 @@
 {
   "name": "@trainapp/server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "type": "module",
   "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
+  "dependencies": {
+    "@trainapp/shared": "*",
+    "fastify": "^5.12.5"
+  },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^24.13.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
-  },
-  "dependencies": {
-    "fastify": "^5.12.5"
   }
 }
