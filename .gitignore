@@ -1,43 +1,40 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
+# Dependencies: installed by npm from package.json, never committed
 node_modules/
 
-# Expo
-.expo/
+# Environment files: will hold secrets (Postgres password, token signing key).
+# .env.example is the one exception: a committed template with no real values.
+.env
+.env.*
+!.env.example
+
+# Build output
 dist/
+*.tsbuildinfo
+
+# Expo (apps/mobile). Leading-slash paths are anchored to this file's folder,
+# so they must spell out the full path from the repo root.
+.expo/
 web-build/
 expo-env.d.ts
+.metro-health-check*
+/apps/mobile/ios/
+/apps/mobile/android/
+/apps/mobile/example/
 
-# Native
+# Native signing keys and credentials
 .kotlin/
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
+*.pem
 *.mobileprovision
 
-# Metro
-.metro-health-check*
-
-# debug
+# Debug logs
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
+# OS files
 .DS_Store
-*.pem
-
-# local env files
-.env*.local
-
-# typescript
-*.tsbuildinfo
-
-example
-
-# generated native folders
-/ios
-/android
