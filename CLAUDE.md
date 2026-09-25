@@ -111,6 +111,7 @@ Workspace
 - Derive types from runtime values (e.g. `SetType` from `SET_TYPES`), so there is one source of truth for both.
 - Stored values (database columns, sync payloads) are stable lowercase identifiers such as `warmup`. Display text and translations are a separate mapping in the app.
 - `@types/node` must match the installed Node major version (currently 24).
+- apps/mobile/.gitignore is managed by Expo CLI. Don't edit it; put ignore rules in the root .gitignore."
 
 TypeScript and modules
 - The server and shared use ES modules with `NodeNext` resolution:
