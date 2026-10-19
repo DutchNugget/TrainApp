@@ -3,11 +3,18 @@ import { db } from './db/client.js';
 import { env } from './env.js';
 // fastify imported as a factory function. Builds and returns new server instances. 
 import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler } from '@fastify/type-provider-zod';
+
+import { authRoutes } from './routes/auth.js';
 
 // turns on built-in request logging and creates server instance. Every request will be printed to terminal.
 // Logs all errors with  no need for logging code later. 
 // the app variable is the handle for the whole server. 
 const app = Fastify({ logger: true});
+app.setValidatorCompiler(validatorCompiler);
+app.setSerializerCompiler(serializerCompiler);
+app.register(authRoutes, {prefix: '/auth'});
+
 const dbUrl = new URL(env.databaseUrl);
 app.log.info(
   { host: dbUrl.host, database: dbUrl.pathname.slice(1) },
@@ -36,3 +43,5 @@ const start = async () => {
 
 //executes the code
 start ();
+
+
