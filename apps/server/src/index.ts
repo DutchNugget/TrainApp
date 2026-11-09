@@ -3,6 +3,8 @@ import { db } from './db/client.js';
 import { env } from './env.js';
 // fastify imported as a factory function. Builds and returns new server instances. 
 import Fastify from 'fastify';
+// fastify ratelimiter
+import rateLimit from '@fastify/rate-limit';
 import { serializerCompiler, validatorCompiler } from '@fastify/type-provider-zod';
 
 import { authRoutes } from './routes/auth.js';
@@ -13,6 +15,7 @@ import { authRoutes } from './routes/auth.js';
 const app = Fastify({ logger: true});
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
+await app.register(rateLimit, { global: false });
 app.register(authRoutes, {prefix: '/auth'});
 
 const dbUrl = new URL(env.databaseUrl);

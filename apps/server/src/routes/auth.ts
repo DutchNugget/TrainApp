@@ -6,7 +6,7 @@ import * as argon2 from 'argon2';
 
 import { and, eq } from 'drizzle-orm';
 
-import { loginRequestSchema, registerRequestSchema } from '@trainapp/shared';
+import { type LoginRequest, loginRequestSchema, registerRequestSchema } from '@trainapp/shared';
 
 
 import { db } from '../db/client.js';
@@ -24,7 +24,14 @@ const DUMMY_HASH = await argon2.hash('timing-equalizer-not-a-real-password');
 
 //the plugin itself: a function that receives the app and registers routes on it.
 export const authRoutes: FastifyPluginAsyncZod = async (app) => {
-  app.post('/register', { schema: { body: registerRequestSchema } }, async (request, reply) => {
+  app.post(
+    '/register',
+     {
+      //rate limiter active)
+      schema: { body: registerRequestSchema },
+      onRequest: app.rateLimit({ max: 30, timeWindow: '1 minute' }),
+     }, 
+     async (request, reply) => {
       // destructuring body 
     const { email, password, name } = request.body;
       //hashing password
@@ -57,25 +64,35 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     }
   });
 
- app.post('/login', { schema: { body: loginRequestSchema } }, async (request, reply) => {
-    const { email, password } = request.body;
+  app.post(
+  '/login',
+  {
+    schema: { body: loginRequestSchema },
+    preHandler: app.rateLimit({
+      max: 10,
+      timeWindow: '15 minutes',
+      keyGenerator: (request) => (request.body as LoginRequest).email,
+      exponentialBackoff: true,
+    }),
+    }, async (request, reply) => {
+      const { email, password } = request.body;
 
-    //  look up the password identity for this email
-    const [identity] = await db
-      .select({ userId: authIdentities.userId, passwordHash: authIdentities.passwordHash })
-      .from(authIdentities)
-      .where(and(eq(authIdentities.provider, 'password'), eq(authIdentities.providerId, email)))
-      .limit(1);
+      //  look up the password identity for this email
+      const [identity] = await db
+        .select({ userId: authIdentities.userId, passwordHash: authIdentities.passwordHash })
+        .from(authIdentities)
+        .where(and(eq(authIdentities.provider, 'password'), eq(authIdentities.providerId, email)))
+        .limit(1);
 
-    //always verify, even with no account, so every attempt takes the same time
-    const hashToCheck = identity?.passwordHash ?? DUMMY_HASH;
-    const passwordMatches = await argon2.verify(hashToCheck, password);
+      //always verify, even with no account, so every attempt takes the same time
+      const hashToCheck = identity?.passwordHash ?? DUMMY_HASH;
+      const passwordMatches = await argon2.verify(hashToCheck, password);
 
-    //one identical answer for every failure (ARCH-09)
-    if (!identity || !passwordMatches) {
-      return reply.code(401).send({ message: 'Invalid email or password' });
-    }
+      //one identical answer for every failure (ARCH-09)
+      if (!identity || !passwordMatches) {
+        return reply.code(401).send({ message: 'Invalid email or password' });
+      }
 
-    return reply.code(200).send({ userId: identity.userId });
-  });
-};
+      return reply.code(200).send({ userId: identity.userId });
+    });
+  };

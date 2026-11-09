@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@fastify/rate-limit": "^11.2.2",
     "@fastify/type-provider-zod": "^1.0.1",
     "@trainapp/shared": "*",
     "argon2": "^0.45.1",
