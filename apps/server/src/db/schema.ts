@@ -21,4 +21,21 @@ export const authIdentities = pgTable('auth_identities',{
   uniqueIndex('auth_identities_provider_provider_id_unique').on(table.provider, table.providerId),
   index('auth_identities_user_id_idx').on(table.userId),
 ]);
-    
+
+
+export const refreshTokens = pgTable('refresh_tokens', {
+
+  id: uuid('id').primaryKey().default(sql`uuidv7()`),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }), 
+  familyId: uuid('family_id').notNull(),
+  tokenhash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+
+}, (table) => [
+  uniqueIndex('refresh_tokens_token_hash_unique').on(table.tokenhash),
+  index('refresh_tokens_family_id_idx').on(table.familyId),
+  index('refresh_tokens_user_id_idx').on(table.userId),
+]);
