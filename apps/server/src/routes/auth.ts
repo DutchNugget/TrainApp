@@ -1,12 +1,17 @@
-import { randomUUID } from 'node:crypto'; 
+import { randomUUID } from 'node:crypto';
 
 import type { FastifyPluginAsyncZod } from '@fastify/type-provider-zod';
 import * as argon2 from 'argon2';
 import { and, eq } from 'drizzle-orm';
 
-import { type LoginRequest, loginRequestSchema, registerRequestSchema } from '@trainapp/shared';
+import {
+  type LoginRequest,
+  loginRequestSchema,
+  refreshRequestSchema,
+  registerRequestSchema,
+} from '@trainapp/shared';
 
-import { createRefreshToken } from '../auth/refresh-tokens.js'; 
+import { createRefreshToken, rotateRefreshToken } from '../auth/refresh-tokens.js';
 import { db } from '../db/client.js';
 import { authIdentities, users } from '../db/schema.js';
 
@@ -53,7 +58,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
           userId: user.id,
           provider: "password",
           providerId: email,
-          email, 
+          email,
           passwordHash,
         });
 
@@ -118,4 +123,23 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
 
       return reply.code(200).send({ accessToken, refreshToken });
     });
+
+  // POST /auth/refresh: swap a refresh token for a new access token and the next
+  // refresh token. The old refresh token stops working (rotation).
+  app.post('/refresh', { schema: { body: refreshRequestSchema } }, async (request, reply) => {
+    const result = await rotateRefreshToken(request.body.refreshToken);
+
+    if (!result.ok) {
+      // Reuse is a security event worth knowing about; the caller still sees a plain 401.
+      if (result.reason === 'reused') {
+        request.log.warn('refresh token reuse detected; token family revoked');
+      }
+      // 401: the phone should pause sync and ask the user to log in again.
+      // Logging workouts keeps working offline in the meantime (ARCH-09).
+      return reply.code(401).send({ message: 'Invalid refresh token' });
+    }
+
+    const accessToken = app.jwt.sign({ sub: result.userId });
+    return reply.code(200).send({ accessToken, refreshToken: result.refreshToken });
+  });
   };
