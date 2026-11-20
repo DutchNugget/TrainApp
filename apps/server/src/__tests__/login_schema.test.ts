@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { loginRequestSchema } from '@trainapp/shared';
 
-
+// A valid login. Every test starts from this and changes only the field it's about.
 const validInput = {
   email: 'david@example.com',
   password: 'correct horse battery',
@@ -28,6 +28,8 @@ describe('loginRequestSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  // Login doesn't apply the sign-up minimum, so older accounts keep working
+  // if the sign-up rules get stricter.
   it('accepts a password shorter than the sign-up minimum', () => {
     const result = loginRequestSchema.safeParse({
       ...validInput,
