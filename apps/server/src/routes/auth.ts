@@ -1,14 +1,12 @@
-//Fastify plugin whose routes use Zod schemas.
+import { randomUUID } from 'node:crypto'; 
 
 import type { FastifyPluginAsyncZod } from '@fastify/type-provider-zod';
-
 import * as argon2 from 'argon2';
-
 import { and, eq } from 'drizzle-orm';
 
 import { type LoginRequest, loginRequestSchema, registerRequestSchema } from '@trainapp/shared';
 
-
+import { createRefreshToken } from '../auth/refresh-tokens.js'; 
 import { db } from '../db/client.js';
 import { authIdentities, users } from '../db/schema.js';
 
@@ -93,6 +91,11 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
         return reply.code(401).send({ message: 'Invalid email or password' });
       }
 
-      return reply.code(200).send({ userId: identity.userId });
+      // NEW: a fresh login starts a new token family (chain) for this device
+      const familyId = randomUUID();
+      const refreshToken = await createRefreshToken(identity.userId, familyId);
+      const accessToken = app.jwt.sign({ sub: identity.userId });
+
+      return reply.code(200).send({ accessToken, refreshToken }); // CHANGED: was { userId: identity.userId }
     });
   };

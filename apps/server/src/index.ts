@@ -8,7 +8,7 @@ import rateLimit from '@fastify/rate-limit';
 import { serializerCompiler, validatorCompiler } from '@fastify/type-provider-zod';
 
 import { authRoutes } from './routes/auth.js';
-
+import jwt from '@fastify/jwt';
 // turns on built-in request logging and creates server instance. Every request will be printed to terminal.
 // Logs all errors with  no need for logging code later. 
 // the app variable is the handle for the whole server. 
@@ -16,6 +16,11 @@ const app = Fastify({ logger: true});
 app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
 await app.register(rateLimit, { global: false });
+await app.register(jwt, {
+  secret: env.jwtSecret,
+  sign: { expiresIn: '15m' },
+});
+
 app.register(authRoutes, {prefix: '/auth'});
 
 const dbUrl = new URL(env.databaseUrl);
