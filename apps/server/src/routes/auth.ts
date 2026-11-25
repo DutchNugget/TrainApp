@@ -11,14 +11,12 @@ import {
   registerRequestSchema,
 } from '@trainapp/shared';
 
+import { authenticate } from '../auth/authenticate.js'; // NEW
 import { createRefreshToken, rotateRefreshToken } from '../auth/refresh-tokens.js';
 import { db } from '../db/client.js';
 import { authIdentities, users } from '../db/schema.js';
 
-// Checks whether a database error means "this email is already registered".
-// 23505 is Postgres's code for "unique rule broken". We also check the rule's name,
-// so a different unique rule breaking doesn't get reported as a duplicate email.
-// Drizzle wraps the Postgres error, so the details are in err.cause.
+//helper function
 function isDuplicateEmail(err: unknown):boolean {
   const cause = (err as { cause?: {code?: string; constraint?: string } }).cause;
   return cause?.code === '23505' && cause.constraint === "auth_identities_provider_provider_id_unique"
@@ -28,29 +26,23 @@ function isDuplicateEmail(err: unknown):boolean {
 // whether or not the email exists (no timing leak).
 const DUMMY_HASH = await argon2.hash('timing-equalizer-not-a-real-password');
 
-// The plugin itself: a function that receives the app and registers routes on it.
-// index.ts registers it with the /auth prefix.
+//the plugin itself: a function that receives the app and registers routes on it.
 export const authRoutes: FastifyPluginAsyncZod = async (app) => {
-  // POST /auth/register: create an account with email + password.
   app.post(
     '/register',
      {
-      // Zod checks the body before the handler runs. Invalid input gets a 400.
+      //rate limiter active)
       schema: { body: registerRequestSchema },
-      // At most 30 sign-ups per minute from one IP address (the default key).
-      // onRequest runs before the body is parsed, which is fine since we only need the IP.
       onRequest: app.rateLimit({ max: 30, timeWindow: '1 minute' }),
-     },
+     }, 
      async (request, reply) => {
-      // Already checked and cleaned up by the schema (email trimmed and lowercased).
+      // destructuring body 
     const { email, password, name } = request.body;
-      // argon2id hash. Only the hash is stored, never the password itself.
-    const passwordHash = await argon2.hash(password);
+      //hashing password
+    const passwordHash = await argon2.hash(password); 
 
     try {
-      // Create the user and their password identity in one transaction:
-      // either both rows are saved or neither is. Without it, a failure on the
-      // second insert would leave a user with no way to log in.
+      //inserts user and returns userID
       const userId = await db.transaction(async (tx)=> {
         const [user] = await tx.insert(users).values({ name }).returning({ id: users.id })
 
@@ -58,35 +50,28 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
           userId: user.id,
           provider: "password",
           providerId: email,
-          email,
+          email, 
           passwordHash,
         });
 
         return user.id;
 
       });
-      // 201 Created: a new account was made.
-      return reply.code(201).send({ userId });
-    } catch (err) {
-       // 409 Conflict: that email is already registered.
-       // (Unlike login, sign-up can't hide that an account exists: the insert fails either way.)
+      //success response 
+      return reply.code(201).send({ userId });  
+      //error if email is duplicate
+    } catch (err) { 
        if (isDuplicateEmail(err)) {
         return reply.code(409).send({ message: "An account with that email already exists."});
        }
-       // Any other error: rethrow so Fastify logs it and replies 500.
        throw err;
     }
   });
 
-  // POST /auth/login: check email + password, and return tokens.
   app.post(
   '/login',
   {
     schema: { body: loginRequestSchema },
-    // At most 10 attempts per 15 minutes for each email, with longer waits after
-    // repeated failures. This slows down password guessing on a single account.
-    // It's a preHandler (not onRequest) because it needs the parsed, lowercased
-    // email from the body, which only exists after validation.
     preHandler: app.rateLimit({
       max: 10,
       timeWindow: '15 minutes',
@@ -96,36 +81,31 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     }, async (request, reply) => {
       const { email, password } = request.body;
 
-      // Look up the password identity for this email. `identity` is undefined if there's none.
+      //  look up the password identity for this email
       const [identity] = await db
         .select({ userId: authIdentities.userId, passwordHash: authIdentities.passwordHash })
         .from(authIdentities)
         .where(and(eq(authIdentities.provider, 'password'), eq(authIdentities.providerId, email)))
         .limit(1);
 
-      // Always run the (slow) verify, even when there's no account, so every attempt
-      // takes the same time. Otherwise a fast reply would reveal "no such email".
+      //always verify, even with no account, so every attempt takes the same time
       const hashToCheck = identity?.passwordHash ?? DUMMY_HASH;
       const passwordMatches = await argon2.verify(hashToCheck, password);
 
-      // 401 Unauthorized, with the same message whether the email or the password
-      // was wrong, so nobody can use login to find out who has an account (ARCH-09).
+      //one identical answer for every failure (ARCH-09)
       if (!identity || !passwordMatches) {
         return reply.code(401).send({ message: 'Invalid email or password' });
       }
 
-      // A fresh login starts a new token family (chain) for this device.
+      // a fresh login starts a new token family (chain) for this device
       const familyId = randomUUID();
-      // Long-lived (90 days): the phone stores it and uses it to get new access tokens.
       const refreshToken = await createRefreshToken(identity.userId, familyId);
-      // Short-lived (15 min): sent with each API request. `sub` (subject) = the user's ID.
       const accessToken = app.jwt.sign({ sub: identity.userId });
 
       return reply.code(200).send({ accessToken, refreshToken });
     });
 
-  // POST /auth/refresh: swap a refresh token for a new access token and the next
-  // refresh token. The old refresh token stops working (rotation).
+  // exchange a refresh token for a new access token + the next refresh token
   app.post('/refresh', { schema: { body: refreshRequestSchema } }, async (request, reply) => {
     const result = await rotateRefreshToken(request.body.refreshToken);
 
@@ -134,12 +114,27 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       if (result.reason === 'reused') {
         request.log.warn('refresh token reuse detected; token family revoked');
       }
-      // 401: the phone should pause sync and ask the user to log in again.
-      // Logging workouts keeps working offline in the meantime (ARCH-09).
       return reply.code(401).send({ message: 'Invalid refresh token' });
     }
 
     const accessToken = app.jwt.sign({ sub: result.userId });
     return reply.code(200).send({ accessToken, refreshToken: result.refreshToken });
+  });
+
+  // NEW: who am I? Requires a valid access token.
+  app.get('/me', { onRequest: authenticate }, async (request, reply) => {
+    const [user] = await db
+      .select({ id: users.id, name: users.name, createdAt: users.createdAt })
+      .from(users)
+      .where(eq(users.id, request.user.sub))
+      .limit(1);
+
+    // The token is valid, but the account may have been deleted since it was issued:
+    // access tokens can't be cancelled early, so check that the user still exists.
+    if (!user) {
+      return reply.code(401).send({ message: 'Account no longer exists' });
+    }
+
+    return reply.code(200).send(user);
   });
   };
