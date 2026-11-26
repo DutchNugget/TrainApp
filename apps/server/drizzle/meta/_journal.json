@@ -8,6 +8,20 @@
       "when": 1791906971016,
       "tag": "0000_create_users_and_auth_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794516538929,
+      "tag": "0001_create_refresh_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794516700134,
+      "tag": "0002_rename_family_id_column",
+      "breakpoints": true
     }
   ]
 }
