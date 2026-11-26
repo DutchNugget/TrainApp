@@ -16,7 +16,9 @@ export function hashToken(token: string): string {
 
 // Makes a new random token plus the database row describing it.
 // The row holds only the hash; the real token goes back to the phone.
-function generateRefreshToken(userId: string, familyId: string) {
+// Exported so sign-up can insert the row inside its own transaction.
+// It doesn't touch the database itself; the caller decides where the row goes.
+export function generateRefreshToken(userId: string, familyId: string) {
   const token = randomBytes(32).toString('base64url');
   const row = {
     userId,
@@ -80,4 +82,25 @@ export async function rotateRefreshToken(token: string): Promise<RotateResult> {
 
     return { ok: true, userId: current.userId, refreshToken: next.token } as const;
   });
+}
+
+// Logout: cancel every token in this token's family, so nothing from that
+// login can be refreshed again. Unknown or already-revoked tokens are simply ignored.
+// Other devices have their own families, so they stay signed in.
+// No transaction or row lock needed: revoking twice has the same result as once.
+export async function revokeRefreshTokenFamily(token: string): Promise<void> {
+  const [current] = await db
+    .select({ familyId: refreshTokens.familyId })
+    .from(refreshTokens)
+    .where(eq(refreshTokens.tokenHash, hashToken(token)))
+    .limit(1);
+
+  if (!current) {
+    return;
+  }
+
+  await db
+    .update(refreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(refreshTokens.familyId, current.familyId), isNull(refreshTokens.revokedAt)));
 }
