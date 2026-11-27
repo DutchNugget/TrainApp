@@ -5,12 +5,14 @@ import * as argon2 from 'argon2';
 import { and, eq } from 'drizzle-orm';
 
 import {
+  appleSignInRequestSchema,
   type LoginRequest,
   loginRequestSchema,
   refreshRequestSchema,
   registerRequestSchema,
 } from '@trainapp/shared';
 
+import { verifyAppleIdentityToken } from '../auth/apple.js';
 import { authenticate } from '../auth/authenticate.js';
 import {
   createRefreshToken,
@@ -20,14 +22,27 @@ import {
 } from '../auth/refresh-tokens.js';
 import { db } from '../db/client.js';
 import { authIdentities, refreshTokens, users } from '../db/schema.js';
+import { env } from '../env.js';
 
-// Checks whether a database error means "this email is already registered".
+// Checks whether a database error means "this sign-in identity already exists":
+// for password sign-up, a registered email; for Apple, an Apple account already linked.
 // 23505 is Postgres's code for "unique rule broken". We also check the rule's name,
-// so a different unique rule breaking doesn't get reported as a duplicate email.
+// so a different unique rule breaking doesn't get reported as a duplicate identity.
 // Drizzle wraps the Postgres error, so the details are in err.cause.
-function isDuplicateEmail(err: unknown):boolean {
+function isDuplicateIdentity(err: unknown):boolean {
   const cause = (err as { cause?: {code?: string; constraint?: string } }).cause;
   return cause?.code === '23505' && cause.constraint === "auth_identities_provider_provider_id_unique"
+}
+
+// Finds the user linked to an Apple account, or undefined if there's none yet.
+// Used twice by /apple: the normal lookup, and again after losing a race (see below).
+async function findAppleUserId(appleSub: string): Promise<string | undefined> {
+  const [identity] = await db
+    .select({ userId: authIdentities.userId })
+    .from(authIdentities)
+    .where(and(eq(authIdentities.provider, 'apple'), eq(authIdentities.providerId, appleSub)))
+    .limit(1);
+  return identity?.userId;
 }
 
 // Used when no account matches, so failed logins take the same time
@@ -93,7 +108,7 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     } catch (err) {
        // 409 Conflict: that email is already registered.
        // (Unlike login, sign-up can't hide that an account exists: the insert fails either way.)
-       if (isDuplicateEmail(err)) {
+       if (isDuplicateIdentity(err)) {
         return reply.code(409).send({ message: "An account with that email already exists."});
        }
        // Any other error: rethrow so Fastify logs it and replies 500.
@@ -140,6 +155,74 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
       return reply.code(200).send(await issueTokens(identity.userId));
     });
 
+  // POST /auth/apple: sign in (or sign up) with Apple.
+  // Apple checks who the person is; we check Apple's identity token, then
+  // either sign in the linked user or create a new one.
+  // Accounts are never matched by email (ARCH-09): an Apple sign-in with the same
+  // email as a password account gets its own, separate account.
+  app.post(
+    '/apple',
+    {
+      schema: { body: appleSignInRequestSchema },
+      // Same per-IP limit as sign-up, since this can create accounts too.
+      onRequest: app.rateLimit({ max: 30, timeWindow: '1 minute' }),
+    },
+    async (request, reply) => {
+      const { identityToken, nonce, name } = request.body;
+
+      // Signature (Apple's key), issuer, audience (our app), expiry and nonce.
+      const apple = await verifyAppleIdentityToken(identityToken, nonce, {
+        audience: env.appleAudiences,
+      });
+      // 401: the token is forged, expired, meant for another app, or the nonce doesn't
+      // match (a replayed token). One message for all, like login.
+      if (!apple) {
+        return reply.code(401).send({ message: 'Invalid Apple sign-in' });
+      }
+
+      // Returning user: this Apple account is already linked, so just sign them in.
+      // 200 here and 201 for a new account, so the app can tell the two apart.
+      const existingUserId = await findAppleUserId(apple.sub);
+      if (existingUserId) {
+        return reply.code(200).send(await issueTokens(existingUserId));
+      }
+
+      // New user: user, Apple identity and first refresh token in one transaction,
+      // exactly like email sign-up. No password hash: Apple did the checking.
+      try {
+        const { userId, refreshToken } = await db.transaction(async (tx) => {
+          const [user] = await tx.insert(users).values({ name }).returning({ id: users.id });
+
+          await tx.insert(authIdentities).values({
+            userId: user.id,
+            provider: 'apple',
+            providerId: apple.sub,
+            email: apple.email,
+          });
+
+          const firstToken = generateRefreshToken(user.id, randomUUID());
+          await tx.insert(refreshTokens).values(firstToken.row);
+
+          return { userId: user.id, refreshToken: firstToken.token };
+        });
+
+        const accessToken = app.jwt.sign({ sub: userId });
+        return reply.code(201).send({ accessToken, refreshToken });
+      } catch (err) {
+        // Race: a second request (a double tap, or a retry on bad signal) created this
+        // Apple user between our lookup and our insert, so the unique rule blocked us.
+        // The account exists now, so look it up again and sign in to it.
+        if (isDuplicateIdentity(err)) {
+          const racedUserId = await findAppleUserId(apple.sub);
+          if (racedUserId) {
+            return reply.code(200).send(await issueTokens(racedUserId));
+          }
+        }
+        throw err;
+      }
+    },
+  );
+
   // POST /auth/refresh: swap a refresh token for a new access token and the next
   // refresh token. The old refresh token stops working (rotation).
   app.post('/refresh', { schema: { body: refreshRequestSchema } }, async (request, reply) => {
@@ -178,8 +261,9 @@ export const authRoutes: FastifyPluginAsyncZod = async (app) => {
     return reply.code(200).send(user);
   });
 
-  // POST /auth/logout: sign out this device by revoking its refresh-token family. Always 204, valid token
-  // or not, so the response reveals nothing and repeating it is harmless (idempotent).
+  // POST /auth/logout: sign out this device by revoking its refresh-token family.
+  // Always 204 (success, no body), valid token or not, so the response reveals nothing
+  // and repeating it is harmless (idempotent).
   // Same body as /refresh ({ refreshToken }), so it reuses that schema.
   app.post('/logout', { schema: { body: refreshRequestSchema } }, async (request, reply) => {
     await revokeRefreshTokenFamily(request.body.refreshToken);
